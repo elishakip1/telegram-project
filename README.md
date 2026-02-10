@@ -67,25 +67,114 @@ python webhook.py
 
 ## What was fixed
 
-- User records are now guaranteed (`_ensure_user_record`) before balance/add-cash operations.
+- User records are guaranteed (`_ensure_user_record`) before balance/add-cash operations.
 - TRC20 address is generated and saved if missing.
-- Add Cash now always returns a real wallet address (no more `None`).
+- Add Cash now returns a real wallet address (no more `None`) or a clear temporary error.
+- DV.net wallet response parsing is more reliable (supports JSON and text payload forms).
 - Button commands for Invite, About Us, Feedback, and Support are explicitly handled.
 - Search state no longer incorrectly hijacks menu button presses.
-- Webhook validates payload and updates balances safely.
+- Webhook validates status, external ID, and amount before balance updates.
 
-## Updating safely
+## How to update on your Ubuntu server
 
-1. Pull new code.
-2. Update `config.yaml` values if needed.
-3. Restart both bot and webhook services.
-4. Test in Telegram:
-   - `/start`
-   - `➕ Add Cash`
-   - `💰 Balance`
-   - `👥 Invite`
-   - `ℹ️ About Us`
-   - `💬 Feedback`
-   - `🎧 Support`
+From your server shell:
 
-If one response is wrong, check the corresponding module in `app/telegram_bot.py` or `app/services/dvnet.py`.
+```bash
+cd /workspace/telegram-project
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+If you changed `config.yaml`, verify:
+- `telegram.token`
+- `telegram.bot_username`
+- `supabase.url`
+- `supabase.key`
+- `server.dv_api_key`
+- `server.dv_base_url`
+
+Then restart both processes.
+
+### If you run manually in terminal/tmux
+
+Stop old bot/webhook processes and start again:
+
+```bash
+cd /workspace/telegram-project
+source .venv/bin/activate
+python main.py
+```
+
+```bash
+cd /workspace/telegram-project
+source .venv/bin/activate
+python webhook.py
+```
+
+### If you run with systemd (recommended)
+
+Restart services after each deploy:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart telegram-bot
+sudo systemctl restart telegram-webhook
+sudo systemctl status telegram-bot --no-pager
+sudo systemctl status telegram-webhook --no-pager
+```
+
+Example unit files:
+
+`/etc/systemd/system/telegram-bot.service`
+
+```ini
+[Unit]
+Description=Telegram Bot
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/workspace/telegram-project
+ExecStart=/workspace/telegram-project/.venv/bin/python main.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/systemd/system/telegram-webhook.service`
+
+```ini
+[Unit]
+Description=Telegram DV.net Webhook
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/workspace/telegram-project
+ExecStart=/workspace/telegram-project/.venv/bin/python webhook.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable once:
+
+```bash
+sudo systemctl enable telegram-bot
+sudo systemctl enable telegram-webhook
+```
+
+## Quick post-update checks in Telegram
+
+1. `/start`
+2. `➕ Add Cash` (must return a TRC20 address)
+3. `💰 Balance`
+4. `👥 Invite`
+5. `ℹ️ About Us`
+6. `💬 Feedback`
+7. `🎧 Support`

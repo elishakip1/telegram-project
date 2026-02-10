@@ -13,18 +13,27 @@ async def dv_webhook(request: Request):
     if data.get("status") != "confirmed":
         return {"status": "ignored"}
 
-    uid = data.get("store_external_id")
-    if uid is None:
+    uid_raw = data.get("store_external_id")
+    if uid_raw is None:
         return {"status": "ignored", "reason": "missing store_external_id"}
 
-    amount = float(data.get("amount", 0))
-    user_resp = supabase.table("users").select("balance").eq("user_id", int(uid)).single().execute()
+    try:
+        uid = int(uid_raw)
+    except (TypeError, ValueError):
+        return {"status": "ignored", "reason": "invalid store_external_id"}
+
+    try:
+        amount = float(data.get("amount", 0))
+    except (TypeError, ValueError):
+        return {"status": "ignored", "reason": "invalid amount"}
+
+    user_resp = supabase.table("users").select("balance").eq("user_id", uid).single().execute()
     user = user_resp.data
     if not user:
         return {"status": "ignored", "reason": "user not found"}
 
     new_balance = float(user.get("balance", 0)) + amount
-    supabase.table("users").update({"balance": new_balance}).eq("user_id", int(uid)).execute()
+    supabase.table("users").update({"balance": new_balance}).eq("user_id", uid).execute()
     return {"status": "success"}
 
 

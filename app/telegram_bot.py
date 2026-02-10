@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from app.config import get_config
 from app.services.db import get_supabase
-from app.services.dvnet import DVNetClient
+from app.services.dvnet import DVNetClient, DVNetError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -101,7 +101,12 @@ async def buy_item(update: Update, book_id: str) -> None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
     ref = _find_referral_arg(context)
-    _ensure_user_record(uid, ref)
+    try:
+        _ensure_user_record(uid, ref)
+    except DVNetError:
+        logger.exception("Failed to initialize user %s", uid)
+        await update.message.reply_text("❌ We could not create your deposit wallet right now. Please try again shortly.")
+        return
     await update.message.reply_text("🏠 Home", reply_markup=get_main_menu())
 
 
@@ -122,7 +127,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     if txt == "➕ Add Cash":
-        user = _ensure_user_record(uid)
+        try:
+            user = _ensure_user_record(uid)
+        except DVNetError:
+            logger.exception("Failed to fetch/create wallet for user %s", uid)
+            await update.message.reply_text("❌ Wallet generation failed. Please try again in a minute.")
+            return
         await update.message.reply_text(f"📥 Send TRC20 USDT to:\n{user['tron_address']}")
         return
 
