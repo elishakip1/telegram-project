@@ -16,6 +16,14 @@ config = get_config()
 dvnet = DVNetClient()
 
 
+def _business_cfg() -> dict:
+    return config.get("business", {}) if isinstance(config, dict) else {}
+
+
+def _telegram_cfg() -> dict:
+    return config.get("telegram", {}) if isinstance(config, dict) else {}
+
+
 def get_main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
@@ -58,11 +66,13 @@ def _ensure_user_record(user_id: int, referred_by: Optional[int] = None) -> dict
 async def perform_search(update: Update, query: str) -> None:
     res = supabase.table("books").select("*").eq("is_sold", False).execute()
     matches = []
+    business = _business_cfg()
+    book_price = business.get("book_price", 0)
     for book in res.data:
         segments = book["full_code_string"].split(",")
         if len(segments) >= 12 and query.lower() in segments[11].lower():
             matches.append(
-                f"📖 **{segments[11]}**\nPrice: {config['business']['book_price']} USDT\nBuy: `/buy_{book['id']}`"
+                f"📖 **{segments[11]}**\nPrice: {book_price} USDT\nBuy: `/buy_{book['id']}`"
             )
 
     message = "\n\n".join(matches[:5]) if matches else "❌ No books found matching that name."
@@ -73,21 +83,24 @@ async def buy_item(update: Update, book_id: str) -> None:
     uid = update.effective_user.id
     user = _ensure_user_record(uid)
     book = supabase.table("books").select("*").eq("id", book_id).single().execute().data
+    business = _business_cfg()
+    book_price = float(business.get("book_price", 0))
+    referral_percent = float(business.get("referral_percent", 0))
 
     if not book or book.get("is_sold"):
         await update.message.reply_text("❌ This item is no longer available.")
         return
 
-    if float(user.get("balance", 0)) < config["business"]["book_price"]:
+    if float(user.get("balance", 0)) < book_price:
         await update.message.reply_text("❌ Insufficient balance.")
         return
 
-    new_balance = float(user["balance"]) - config["business"]["book_price"]
+    new_balance = float(user["balance"]) - book_price
     supabase.table("users").update({"balance": new_balance}).eq("user_id", uid).execute()
     supabase.table("books").update({"is_sold": True}).eq("id", book_id).execute()
 
     if user.get("referred_by"):
-        bonus = config["business"]["book_price"] * config["business"]["referral_percent"]
+        bonus = book_price * referral_percent
         ref = supabase.table("users").select("balance").eq("user_id", user["referred_by"]).single().execute().data
         if ref:
             supabase.table("users").update({"balance": float(ref["balance"]) + bonus}).eq(
@@ -107,6 +120,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Failed to initialize user %s", uid)
         await update.message.reply_text("❌ We could not create your deposit wallet right now. Please try again shortly.")
         return
+    except Exception:
+        logger.exception("Unexpected startup failure for user %s", uid)
+        await update.message.reply_text("❌ Temporary server issue. Please try again shortly.")
+        return
     await update.message.reply_text("🏠 Home", reply_markup=get_main_menu())
 
 
@@ -117,62 +134,72 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     txt = update.message.text.strip()
     uid = update.effective_user.id
 
-    if txt.startswith("/buy_"):
-        await buy_item(update, txt.split("_", maxsplit=1)[1])
-        return
-
-    if txt == "🔍 Search":
-        context.user_data["state"] = "SEARCH"
-        await update.message.reply_text("🔎 Type the name of the book:")
-        return
-
-    if txt == "➕ Add Cash":
-        try:
-            user = _ensure_user_record(uid)
-        except DVNetError:
-            logger.exception("Failed to fetch/create wallet for user %s", uid)
-            await update.message.reply_text("❌ Wallet generation failed. Please try again in a minute.")
+    try:
+        if txt.startswith("/buy_"):
+            await buy_item(update, txt.split("_", maxsplit=1)[1])
             return
-        await update.message.reply_text(f"📥 Send TRC20 USDT to:\n{user['tron_address']}")
-        return
 
-    if txt == "💰 Balance":
-        user = _ensure_user_record(uid)
-        await update.message.reply_text(f"💳 Balance: {user.get('balance', 0)} USDT")
-        return
+        if txt == "🔍 Search":
+            context.user_data["state"] = "SEARCH"
+            await update.message.reply_text("🔎 Type the name of the book:")
+            return
 
-    if txt == "👥 Invite":
-        referral = config["business"]["referral_percent"] * 100
-        bot_username = config["telegram"].get("bot_username", "")
-        link = (
-            f"https://t.me/{bot_username}?start={uid}"
-            if bot_username
-            else "Set telegram.bot_username in config.yaml to enable invite links."
-        )
-        await update.message.reply_text(f"🎁 Referral Bonus: {referral:.0f}%\n\nYour Invite Link:\n{link}")
-        return
+        if txt == "➕ Add Cash":
+            try:
+                user = _ensure_user_record(uid)
+            except DVNetError:
+                logger.exception("Failed to fetch/create wallet for user %s", uid)
+                await update.message.reply_text("❌ Wallet generation failed. Please try again in a minute.")
+                return
+            except Exception:
+                logger.exception("Failed to load user wallet for user %s", uid)
+                await update.message.reply_text("❌ Could not load your wallet address right now.")
+                return
+            await update.message.reply_text(f"📥 Send TRC20 USDT to:\n{user['tron_address']}")
+            return
 
-    if txt == "ℹ️ About Us":
-        about_text = config["business"].get("about_us", "We sell digital books with instant delivery.")
-        await update.message.reply_text(about_text)
-        return
+        if txt == "💰 Balance":
+            user = _ensure_user_record(uid)
+            await update.message.reply_text(f"💳 Balance: {user.get('balance', 0)} USDT")
+            return
 
-    if txt == "💬 Feedback":
-        feedback_contact = config["business"].get("feedback_contact", "@your_feedback_username")
-        await update.message.reply_text(f"💬 Share feedback here: {feedback_contact}")
-        return
+        if txt == "👥 Invite":
+            business = _business_cfg()
+            telegram_cfg = _telegram_cfg()
+            referral = float(business.get("referral_percent", 0)) * 100
+            bot_username = telegram_cfg.get("bot_username", "")
+            link = (
+                f"https://t.me/{bot_username}?start={uid}"
+                if bot_username
+                else "Set telegram.bot_username in config.yaml to enable invite links."
+            )
+            await update.message.reply_text(f"🎁 Referral Bonus: {referral:.0f}%\n\nYour Invite Link:\n{link}")
+            return
 
-    if txt == "🎧 Support":
-        support_contact = config["business"].get("support_contact", "@your_support_username")
-        await update.message.reply_text(f"🎧 Support: {support_contact}")
-        return
+        if txt == "ℹ️ About Us":
+            about_text = _business_cfg().get("about_us", "We sell digital books with instant delivery.")
+            await update.message.reply_text(about_text)
+            return
 
-    if context.user_data.get("state") == "SEARCH":
-        context.user_data["state"] = None
-        await perform_search(update, txt)
-        return
+        if txt == "💬 Feedback":
+            feedback_contact = _business_cfg().get("feedback_contact", "@your_feedback_username")
+            await update.message.reply_text(f"💬 Share feedback here: {feedback_contact}")
+            return
 
-    await update.message.reply_text("❓ I didn't recognize that command. Opening menu...", reply_markup=get_main_menu())
+        if txt == "🎧 Support":
+            support_contact = _business_cfg().get("support_contact", "@your_support_username")
+            await update.message.reply_text(f"🎧 Support: {support_contact}")
+            return
+
+        if context.user_data.get("state") == "SEARCH":
+            context.user_data["state"] = None
+            await perform_search(update, txt)
+            return
+
+        await update.message.reply_text("❓ I didn't recognize that command. Opening menu...", reply_markup=get_main_menu())
+    except Exception:
+        logger.exception("Failed handling message for user %s: %s", uid, txt)
+        await update.message.reply_text("❌ Something went wrong while processing that. Please try again.")
 
 
 def main() -> None:

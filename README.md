@@ -178,3 +178,22 @@ sudo systemctl enable telegram-webhook
 5. `ℹ️ About Us`
 6. `💬 Feedback`
 7. `🎧 Support`
+
+## If "nothing works" after deploy
+
+Run these checks on Ubuntu server:
+
+```bash
+cd /workspace/telegram-project
+source .venv/bin/activate
+python -m py_compile main.py webhook.py app/config.py app/telegram_bot.py app/services/db.py app/services/dvnet.py
+```
+
+If compile is OK, check service logs:
+
+```bash
+sudo journalctl -u telegram-bot -n 100 --no-pager
+sudo journalctl -u telegram-webhook -n 100 --no-pager
+```
+
+Common cause: missing keys in `config.yaml` (especially `business.*` and `telegram.bot_username`).
